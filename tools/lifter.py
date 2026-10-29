@@ -681,21 +681,26 @@ def emit_asm_batch(batch):
     """Emit one inline-asm block for a run of FP/SIMD instructions."""
     vregs = set()
     gmap = {}
-    flags = False
+    # x16 carries NZCV in and out of a batch that uses the flags, so it can't also hold a guest register or a
+    # constant there: a batch with eight or more of them gave x16 to one, and the flags load overwrote it (the
+    # guest's address became the flags value: a fault at 0x600000a8 in 1.9.0's f_7001416344).
+    flags = any(a.flags for a in batch)
+    scratch = [s for s in SCRATCH if s != 16] if flags else SCRATCH
     consts = []
     words = []
     for a in batch:
         vregs |= a.vregs
-        flags |= a.flags
         w = a.word
         for pos, g in a.gprs:
             if g not in gmap:
-                if len(gmap) + len(consts) >= len(SCRATCH):
+                if len(gmap) + len(consts) >= len(scratch):
                     raise Unsupported('scratch exhausted')
-                gmap[g] = SCRATCH[len(gmap) + len(consts)]
+                gmap[g] = scratch[len(gmap) + len(consts)]
             w = (w & ~(31 << pos)) | (gmap[g] << pos)
         for pos, val in a.consts:
-            s = SCRATCH[len(gmap) + len(consts)]
+            if len(gmap) + len(consts) >= len(scratch):
+                raise Unsupported('scratch exhausted')
+            s = scratch[len(gmap) + len(consts)]
             consts.append((s, val))
             w = (w & ~(31 << pos)) | (s << pos)
         words.append(w)
